@@ -1,4 +1,10 @@
-export function ThemeToggleUI({ isDarkMode, onClick }: { isDarkMode: boolean; onClick: () => void }) {
+export function ThemeToggleUI({
+  isDarkMode,
+  onClick,
+}: {
+  isDarkMode: boolean
+  onClick: () => void
+}) {
   return (
     <button
       onClick={onClick}
@@ -44,5 +50,5 @@ export function ThemeToggleUI({ isDarkMode, onClick }: { isDarkMode: boolean; on
         </svg>
       )}
     </button>
-  );
+  )
 }
