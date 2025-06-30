@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useDebounce } from '@uidotdev/usehooks'
 import { encodeFunctionCall, CalldataPart } from '../lib/calldata-encoder'
+import { ThemeToggle } from '../components/ThemeToggle'
 
 export default function Home() {
   const [input, setInput] = useState('transfer(address,uint256)')
@@ -64,32 +65,38 @@ export default function Home() {
   }
 
   return (
-    <div className="grid grid-rows-[auto_1fr_auto] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)] bg-[#0d1117]">
+    <div className="grid grid-rows-[auto_1fr_auto] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)] bg-gray-50 dark:bg-[#0d1117]">
       <main className="flex flex-col gap-8 w-full max-w-4xl row-start-2">
-        <h1 className="text-2xl font-bold text-center text-white">
+        <div className="flex justify-end w-full">
+          <ThemeToggle />
+        </div>
+        <h1 className="text-2xl font-bold text-center text-gray-900 dark:text-white">
           Solidity Calldata Visualizer
         </h1>
-        <div className="w-full max-w-4xl bg-gray-900 rounded-2xl p-8 shadow-lg border border-gray-700">
+        <div className="w-full max-w-4xl bg-white rounded-2xl p-8 shadow-lg border border-gray-200 dark:bg-gray-900 dark:border-gray-700">
           <div className="flex flex-col gap-4">
-            <label htmlFor="input" className="font-medium text-gray-200">
+            <label
+              htmlFor="input"
+              className="font-medium text-gray-700 dark:text-gray-200"
+            >
               Function Signature / Call
             </label>
             <textarea
               id="input"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              className="w-full p-3 border border-gray-600 rounded-lg bg-gray-800 text-gray-50 font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none transition"
+              className="w-full p-3 border border-gray-300 rounded-lg bg-gray-50 text-gray-900 font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none transition dark:bg-gray-800 dark:text-gray-50 dark:border-gray-600"
               rows={3}
               placeholder="e.g., transfer(address to, uint256 amount)"
             />
 
             {argTypes.length > 0 && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 border border-gray-700 rounded-lg bg-gray-800/50">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 border border-gray-200 rounded-lg bg-gray-100 dark:bg-gray-800 dark:border-gray-700">
                 {argTypes.map((type, i) => (
                   <div key={i} className="flex flex-col gap-1">
                     <label
                       htmlFor={`arg-${i}`}
-                      className="font-mono text-sm text-gray-400"
+                      className="font-mono text-sm text-gray-600 dark:text-gray-400"
                     >
                       {type}
                     </label>
@@ -101,7 +108,7 @@ export default function Home() {
                         newValues[i] = e.target.value
                         setArgValues(newValues)
                       }}
-                      className="w-full p-2 border border-gray-600 rounded-md bg-gray-700 text-gray-50 font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none transition"
+                      className="w-full p-2 border border-gray-300 rounded-md bg-gray-50 text-gray-900 font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none transition dark:bg-gray-700 dark:text-gray-50 dark:border-gray-600"
                       placeholder={`Value for ${type}`}
                     />
                   </div>
@@ -120,36 +127,36 @@ export default function Home() {
 
         {encoded && (
           <div className="w-full max-w-4xl mt-8">
-            <div className="bg-gray-900 rounded-2xl p-8 shadow-lg border border-gray-700">
-              <h2 className="text-xl font-bold text-white mb-4">
+            <div className="bg-white rounded-2xl p-8 shadow-lg border border-gray-200 dark:bg-gray-900 dark:border-gray-700">
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
                 Encoded Calldata
               </h2>
-              <div className="p-4 bg-gray-800 rounded-lg text-emerald-400 font-mono break-all text-sm">
+              <div className="p-4 bg-gray-100 rounded-lg text-green-700 font-mono break-all text-sm dark:bg-gray-800 dark:text-emerald-400">
                 {encoded}
               </div>
 
-              <h2 className="text-xl font-bold text-white mt-6 mb-4">
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white mt-6 mb-4">
                 Breakdown
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {parts.map((part, index) => (
                   <div
                     key={index}
-                    className="p-4 bg-gray-800 rounded-lg flex flex-col gap-2 border border-gray-700 hover:border-blue-500 transition"
+                    className="p-4 bg-gray-100 rounded-lg flex flex-col gap-2 border border-gray-200 hover:border-blue-500 transition dark:bg-gray-800 dark:border-gray-700 dark:hover:border-blue-500"
                   >
                     <div className="flex justify-between items-center">
-                      <span className="font-semibold text-gray-100">
+                      <span className="font-semibold text-gray-800 dark:text-gray-100">
                         {part.name}
                       </span>
-                      <span className="text-xs px-2 py-1 bg-gray-700 text-gray-300 rounded-full">
+                      <span className="text-xs px-2 py-1 bg-gray-200 text-gray-600 rounded-full dark:bg-gray-700 dark:text-gray-300">
                         {part.type}
                       </span>
                     </div>
-                    <div className="font-mono text-emerald-400 break-all text-sm">
+                    <div className="font-mono text-green-700 break-all text-sm dark:text-emerald-400">
                       {part.value}
                     </div>
                     {part.description && (
-                      <div className="text-xs text-gray-400 italic break-words">
+                      <div className="text-xs text-gray-500 italic dark:text-gray-400">
                         {part.description}
                       </div>
                     )}
@@ -161,7 +168,9 @@ export default function Home() {
         )}
       </main>
       <footer className="row-start-3 flex gap-4 items-center justify-center">
-        <p className="text-gray-500">Built with Next.js and viem</p>
+        <p className="text-gray-500 dark:text-gray-400">
+          Built with Next.js and viem
+        </p>
       </footer>
     </div>
   )
