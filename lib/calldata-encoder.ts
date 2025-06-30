@@ -19,7 +19,7 @@ export interface EncodeResult {
 
 export function encodeFunctionCall(
   input: string,
-  argValues: any[]
+  argValues: unknown[]
 ): EncodeResult {
   const parts: CalldataPart[] = []
 
@@ -53,7 +53,7 @@ export function encodeFunctionCall(
   const head: string[] = []
   const tail: { type: string; value: string }[] = []
   let tailOffset = argTypes.length * 32
-  const dynamicParams: { index: number; type: string; value: any }[] = []
+  const dynamicParams: { index: number; type: string; value: unknown }[] = []
 
   argTypes.forEach((type, i) => {
     if (isDynamic(type)) {
