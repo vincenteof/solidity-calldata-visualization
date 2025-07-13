@@ -1,8 +1,25 @@
-import { encodeAbiParameters, keccak256, stringToBytes, toHex } from 'viem'
+import {
+  encodeAbiParameters,
+  keccak256,
+  stringToBytes,
+  parseAbiParameters,
+  type AbiParameter,
+} from 'viem'
 
 // Helper to determine if a type is dynamic
-const isDynamic = (type: string): boolean => {
-  return type.endsWith('[]') || type === 'string' || type === 'bytes'
+const isDynamic = (abiType: AbiParameter): boolean => {
+  if (
+    abiType.type.endsWith('[]') ||
+    abiType.type === 'string' ||
+    abiType.type === 'bytes'
+  ) {
+    return true
+  }
+  if ('components' in abiType) {
+    // A tuple is dynamic if any of its components are dynamic.
+    return (abiType.components || []).some(isDynamic)
+  }
+  return false
 }
 
 export interface CalldataPart {
@@ -19,95 +36,95 @@ export interface EncodeResult {
 
 export function encodeFunctionCall(
   input: string,
-  argValues: unknown[]
+  argValues: unknown[] // argValues can be nested for structs
 ): EncodeResult {
-  const parts: CalldataPart[] = []
-
   // 1. Parse Input
   const fullSignature = input.trim()
-  const funcNameWithTypes = fullSignature.substring(
-    0,
-    fullSignature.indexOf(')') + 1
-  )
-  const funcSignature = funcNameWithTypes.replace(/\s+\w+/g, '') // remove argument names
+  const funcNameMatch = fullSignature.match(/^(.*?)\s*\(/)
+  if (!funcNameMatch) {
+    throw new Error('Invalid function signature')
+  }
+  const funcName = funcNameMatch[1]
 
   const argsStr = fullSignature.substring(
     fullSignature.indexOf('(') + 1,
     fullSignature.lastIndexOf(')')
   )
-  const argTypes = argsStr
-    .split(',')
-    .map((s) => s.trim().split(' ')[0])
-    .filter((t) => t)
+
+  // Use viem's parser to handle complex types like structs
+  const abiParams = parseAbiParameters(argsStr)
+
+  // Reconstruct the canonical signature for the selector, e.g., "transfer(address,uint256)"
+  const getCanonicalSignatureForParams = (
+    params: readonly AbiParameter[]
+  ): string => {
+    return params
+      .map((p) => {
+        if ('components' in p && p.type === 'tuple') {
+          return `(${getCanonicalSignatureForParams(p.components)})`
+        }
+        if ('components' in p && p.type === 'tuple[]') {
+          return `(${getCanonicalSignatureForParams(p.components)})[]`
+        }
+        return p.type
+      })
+      .join(',')
+  }
+  const canonicalParams = getCanonicalSignatureForParams(abiParams)
+  const canonicalSignature = `${funcName}(${canonicalParams})`
 
   // 2. Calculate Function Selector
-  const selector = keccak256(stringToBytes(funcSignature)).slice(0, 10)
-  parts.push({
-    name: 'Function Selector',
-    type: 'bytes4',
-    value: selector,
-    description: `keccak256("${funcSignature}")`,
-  })
+  const selector = keccak256(stringToBytes(canonicalSignature)).slice(0, 10)
 
+  console.log('argValues: ', argValues)
   // 3. Encode Parameters
-  const head: string[] = []
-  const tail: { type: string; value: string }[] = []
-  let tailOffset = argTypes.length * 32
-  const dynamicParams: { index: number; type: string; value: unknown }[] = []
+  const encodedParamsHex = encodeAbiParameters(abiParams, argValues).slice(2)
 
-  argTypes.forEach((type, i) => {
-    if (isDynamic(type)) {
-      head.push(toHex(tailOffset, { size: 32 }).slice(2))
-      dynamicParams.push({ index: i, type, value: argValues[i] })
+  // 4. Assemble Calldata
+  const finalCalldata = selector + encodedParamsHex
+
+  // 5. Build parts for visualization
+  const parts: CalldataPart[] = [
+    {
+      name: 'Function Selector',
+      type: 'bytes4',
+      value: selector,
+      description: `keccak256("${canonicalSignature}")`,
+    },
+  ]
+
+  let headCursor = 0
+  abiParams.forEach((param, i) => {
+    const paramName = param.name || `Parameter ${i + 1}`
+    const headData = encodedParamsHex.substring(headCursor, headCursor + 64)
+    headCursor += 64
+
+    if (isDynamic(param)) {
+      const offset = parseInt(headData, 16)
       parts.push({
-        name: `Parameter ${i + 1} (offset)`,
-        type: `bytes32`,
-        value: toHex(tailOffset, { size: 32 }),
+        name: `${paramName} (${param.type}) (offset)`,
+        type: 'bytes32',
+        value: `0x${headData}`,
+        description: `Points to byte ${offset} in parameters data`,
       })
-      const encoded = encodeAbiParameters([{ type }], [argValues[i]])
-      tailOffset += (encoded.length - 2) / 2 // length in bytes
     } else {
-      const encoded = encodeAbiParameters([{ type }], [argValues[i]])
-      head.push(encoded.slice(2)) // remove 0x prefix
-      parts.push({ name: `Parameter ${i + 1}`, type, value: encoded })
+      parts.push({
+        name: `${paramName} (${param.type})`,
+        type: 'bytes32', // Static elements always take 32 bytes
+        value: `0x${headData}`,
+      })
     }
   })
 
-  dynamicParams.forEach((param) => {
-    const encodedFull = encodeAbiParameters(
-      [{ type: param.type }],
-      [param.value]
-    )
-    const encodedWithout0x = encodedFull.slice(2)
-
-    // For dynamic types, the first 32 bytes (64 hex chars) is an internal offset.
-    // We need to skip this internal offset to get the actual [length][data][padding] part.
-    const actualTailData = encodedWithout0x.substring(64)
-
-    // Add to tail (this is for the final calldata assembly)
-    tail.push({ type: param.type, value: actualTailData })
-
-    // For visualization, split actualTailData further
-    const lengthPart = actualTailData.substring(0, 64)
-    const dataAndPaddingPart = actualTailData.substring(64)
-
+  const tailHex = encodedParamsHex.substring(headCursor)
+  if (tailHex) {
     parts.push({
-      name: `Parameter ${param.index + 1} (tail - length)`,
-      type: `uint256`, // Length is always uint256
-      value: `0x${lengthPart}`,
-      description: `Length of ${param.type} data`,
+      name: 'Tail Data',
+      type: 'bytes',
+      value: `0x${tailHex}`,
+      description: 'Concatenated data for all dynamic parameters',
     })
-    parts.push({
-      name: `Parameter ${param.index + 1} (tail - data)`,
-      type: param.type,
-      value: `0x${dataAndPaddingPart}`,
-      description: `Actual data and padding for ${param.type}`,
-    })
-  })
-
-  // 4. Assemble Calldata
-  const finalCalldata =
-    selector + head.join('') + tail.map((t) => t.value).join('')
+  }
 
   return {
     calldata: finalCalldata,

@@ -4,15 +4,109 @@ import { useState, useEffect } from 'react'
 import { useDebounce } from '@uidotdev/usehooks'
 import { encodeFunctionCall, CalldataPart } from '../lib/calldata-encoder'
 import { ThemeToggle } from '../components/ThemeToggle'
+import { type AbiParameter, parseAbiParameters } from 'viem'
+
+// Define a recursive type for argument values to avoid using 'any'
+type Value = string | Value[] | bigint
+
+// Recursive component to render inputs for ABI parameters
+const ArgInputs = ({
+  params,
+  values,
+  onValueChange,
+}: {
+  params: readonly AbiParameter[]
+  values: Value[]
+  onValueChange: (newValues: Value[]) => void
+}) => {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 border border-gray-200 rounded-lg bg-gray-100 dark:bg-gray-800 dark:border-gray-700">
+      {params.map((param, i) => {
+        const paramName = param.name || `arg${i}`
+        const paramType = param.type
+
+        if ('components' in param && param.components) {
+          return (
+            <fieldset
+              key={i}
+              className="border border-gray-300 rounded-lg p-4 col-span-full dark:border-gray-600"
+            >
+              <legend className="px-2 font-mono text-sm text-gray-600 dark:text-gray-400">
+                {paramName} ({paramType})
+              </legend>
+              <ArgInputs
+                params={param.components}
+                values={(values[i] as Value[]) || []}
+                onValueChange={(newSubValues) => {
+                  const newValues = [...values]
+                  newValues[i] = newSubValues
+                  onValueChange(newValues)
+                }}
+              />
+            </fieldset>
+          )
+        }
+
+        return (
+          <div key={i} className="flex flex-col gap-1">
+            <label
+              htmlFor={`arg-${i}`}
+              className="font-mono text-sm text-gray-600 dark:text-gray-400"
+            >
+              {paramName} ({paramType})
+            </label>
+            <input
+              id={`arg-${i}`}
+              value={(values[i] as string) || ''}
+              onChange={(e) => {
+                const newValues = [...values]
+                newValues[i] = e.target.value
+                onValueChange(newValues)
+              }}
+              className="w-full p-2 border border-gray-300 rounded-md bg-gray-50 text-gray-900 font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none transition dark:bg-gray-700 dark:text-gray-50 dark:border-gray-600"
+              placeholder={`Value for ${paramType}`}
+            />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// Helper to recursively process values, converting numbers to BigInt and strings to booleans
+const processValues = (
+  params: readonly AbiParameter[],
+  values: Value[]
+): unknown[] => {
+  return values.map((val, i) => {
+    const param = params[i]
+    if ('components' in param && param.components) {
+      return processValues(param.components, (val as Value[]) || [])
+    }
+    if (param.type.includes('uint') || param.type.includes('int')) {
+      try {
+        return BigInt(val as string)
+      } catch {
+        return BigInt(0) // Default to 0 if input is not a valid number
+      }
+    }
+    if (param.type === 'bool') {
+      return (val as string).toLowerCase() === 'true'
+    }
+    return val
+  })
+}
 
 export default function Home() {
-  const [input, setInput] = useState('transfer(address,uint256)')
+  const [input, setInput] = useState(
+    'transferFrom(address from, address to, uint256 amount)'
+  )
   const debouncedInput = useDebounce(input, 500) // 500ms delay
 
   const [encoded, setEncoded] = useState('')
   const [parts, setParts] = useState<CalldataPart[]>([])
-  const [argTypes, setArgTypes] = useState<string[]>([])
-  const [argValues, setArgValues] = useState<string[]>([])
+  const [abiParams, setAbiParams] = useState<readonly AbiParameter[]>([])
+  const [argValues, setArgValues] = useState<Value[]>([])
 
   useEffect(() => {
     try {
@@ -20,46 +114,35 @@ export default function Home() {
         debouncedInput.indexOf('(') + 1,
         debouncedInput.lastIndexOf(')')
       )
-      if (argsStr) {
-        const types = argsStr
-          .split(',')
-          .map((s) => s.trim().split(' ')[0])
-          .filter((t) => t)
-        setArgTypes(types)
-        setArgValues((currentValues) =>
-          types.map((_, i) => currentValues[i] || '')
+      const params = parseAbiParameters(argsStr)
+      setAbiParams(params)
+
+      // Reset values when params change, preserving structure
+      const buildInitialValues = (p: readonly AbiParameter[]): Value[] =>
+        p.map((c) =>
+          'components' in c && c.components
+            ? buildInitialValues(c.components)
+            : ''
         )
-      } else {
-        setArgTypes([])
-        setArgValues([])
-      }
+      setArgValues(buildInitialValues(params))
     } catch {
-      setArgTypes([])
+      setAbiParams([])
       setArgValues([])
     }
   }, [debouncedInput])
 
   const handleEncode = () => {
     try {
-      // Convert string numbers to BigInt for viem
-      const processedValues = argValues.map((val, i) => {
-        const type = argTypes[i]
-        if (type.includes('uint') || type.includes('int')) {
-          try {
-            return BigInt(val)
-          } catch {
-            return BigInt(0) // Default to 0 if input is not a valid number
-          }
-        }
-        return val
-      })
-
-      const result = encodeFunctionCall(input, processedValues)
+      const processed = processValues(abiParams, argValues)
+      const result = encodeFunctionCall(input, processed)
       setEncoded(result.calldata)
       setParts(result.parts)
-    } catch (error) {
+    } catch (error: unknown) {
       console.error(error)
-      setEncoded('Error parsing input. Please check the format.')
+      const message = error instanceof Error ? error.message : String(error)
+      setEncoded(
+        `Error parsing input. Please check format. Details: ${message}`
+      )
       setParts([])
     }
   }
@@ -90,30 +173,12 @@ export default function Home() {
               placeholder="e.g., transfer(address to, uint256 amount)"
             />
 
-            {argTypes.length > 0 && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 border border-gray-200 rounded-lg bg-gray-100 dark:bg-gray-800 dark:border-gray-700">
-                {argTypes.map((type, i) => (
-                  <div key={i} className="flex flex-col gap-1">
-                    <label
-                      htmlFor={`arg-${i}`}
-                      className="font-mono text-sm text-gray-600 dark:text-gray-400"
-                    >
-                      {type}
-                    </label>
-                    <input
-                      id={`arg-${i}`}
-                      value={argValues[i] || ''}
-                      onChange={(e) => {
-                        const newValues = [...argValues]
-                        newValues[i] = e.target.value
-                        setArgValues(newValues)
-                      }}
-                      className="w-full p-2 border border-gray-300 rounded-md bg-gray-50 text-gray-900 font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none transition dark:bg-gray-700 dark:text-gray-50 dark:border-gray-600"
-                      placeholder={`Value for ${type}`}
-                    />
-                  </div>
-                ))}
-              </div>
+            {abiParams.length > 0 && (
+              <ArgInputs
+                params={abiParams}
+                values={argValues}
+                onValueChange={setArgValues}
+              />
             )}
 
             <button
