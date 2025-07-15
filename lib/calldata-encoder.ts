@@ -15,9 +15,8 @@ const isDynamic = (abiType: AbiParameter): boolean => {
   ) {
     return true
   }
-  if ('components' in abiType) {
-    // A tuple is dynamic if any of its components are dynamic.
-    return (abiType.components || []).some(isDynamic)
+  if ('components' in abiType && abiType.components) {
+    return abiType.components.some(isDynamic)
   }
   return false
 }
@@ -27,6 +26,7 @@ export interface CalldataPart {
   type: string
   value: string
   description?: string
+  components?: CalldataPart[] // For nested structs/dynamic types
 }
 
 export interface EncodeResult {
@@ -34,9 +34,144 @@ export interface EncodeResult {
   parts: CalldataPart[]
 }
 
+// This interface helps manage dynamic items before they are processed.
+interface DynamicItem {
+  param: AbiParameter
+  name: string
+  offset: number
+}
+
+/**
+ * Parses a chunk of data belonging to a single dynamic item.
+ * @param param - The ABI definition for the dynamic item.
+ * @param dataHex - The hex data for this item, starting from its own beginning.
+ * @returns A list of CalldataPart breaking down this dynamic item.
+ */
+const parseDynamicData = (
+  param: AbiParameter,
+  dataHex: string
+): CalldataPart[] => {
+  if (param.type === 'string' || param.type === 'bytes') {
+    const length = parseInt(dataHex.substring(0, 64), 16)
+    const data = dataHex.substring(64, 64 + length * 2)
+    return [
+      {
+        name: 'length',
+        type: 'uint256',
+        value: `0x${dataHex.substring(0, 64)}`,
+        description: `${length}`,
+      },
+      {
+        name: 'value',
+        type: param.type === 'string' ? 'utf8' : 'hex',
+        value: `0x${data}`,
+      },
+    ]
+  } else if ('components' in param && param.components) {
+    // It's a dynamic tuple, so we parse its contents flatly.
+    // The breakdown will be nested inside the parent tail component.
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
+    const { headParts, tailParts } = buildFlatBreakdown(
+      param.components,
+      dataHex
+    )
+    return [...headParts, ...tailParts]
+  }
+  // Placeholder for other dynamic types like arrays
+  return [
+    {
+      name: 'data',
+      type: 'bytes',
+      value: `0x${dataHex}`,
+      description: 'Raw dynamic data',
+    },
+  ]
+}
+
+/**
+ * Builds a flat breakdown of calldata, separating head and tail parts.
+ * @param params - The ABI parameters for this level of encoding.
+ * @param encodedDataHex - The encoded hex string for this level.
+ * @returns An object containing separated head and tail parts.
+ */
+const buildFlatBreakdown = (
+  params: readonly AbiParameter[],
+  encodedDataHex: string
+): { headParts: CalldataPart[]; tailParts: CalldataPart[] } => {
+  const headParts: CalldataPart[] = []
+  const dynamicItems: DynamicItem[] = []
+  let headCursor = 0
+
+  // First pass: process the head and collect dynamic items
+  params.forEach((param, i) => {
+    const paramName = param.name || `param${i}`
+    const headSlotHex = encodedDataHex.substring(headCursor, headCursor + 64)
+
+    if (isDynamic(param)) {
+      const offset = parseInt(headSlotHex, 16)
+      headParts.push({
+        name: `${paramName} (${param.type})`,
+        type: 'bytes32',
+        value: `0x${headSlotHex}`,
+        description: `Offset to data at byte ${offset}`,
+      })
+      dynamicItems.push({ param, name: paramName, offset })
+    } else if (
+      param.type === 'tuple' &&
+      'components' in param &&
+      param.components
+    ) {
+      // Static tuple: its components are inlined in the head.
+      const staticTupleData = encodedDataHex.substring(
+        headCursor,
+        headCursor + param.components.length * 64
+      )
+      const nested = buildFlatBreakdown(param.components, staticTupleData)
+      headParts.push({
+        name: `${paramName} (${param.type})`,
+        type: 'tuple',
+        value: `0x${staticTupleData}`,
+        components: [...nested.headParts, ...nested.tailParts], // Static tuples don't have tails, so this is just for completeness
+      })
+    } else {
+      headParts.push({
+        name: `${paramName} (${param.type})`,
+        type: 'bytes32',
+        value: `0x${headSlotHex}`,
+      })
+    }
+    headCursor +=
+      32 *
+      (param.type === 'tuple' && !isDynamic(param) && param.components
+        ? param.components.length
+        : 1)
+  })
+
+  // Sort dynamic items by their offset to process tail data in order
+  dynamicItems.sort((a, b) => a.offset - b.offset)
+
+  const tailParts: CalldataPart[] = []
+  dynamicItems.forEach((item) => {
+    const dataStart = item.offset * 2
+    // The data for this item runs from its start to the start of the next item, or to the end.
+    const nextOffset = encodedDataHex.length
+    const itemDataHex = encodedDataHex.substring(dataStart, nextOffset)
+
+    tailParts.push({
+      name: `Tail for ${item.name}`,
+      type: item.param.type,
+      value: `(see components)`,
+      description: `Data located at byte ${item.offset}`,
+      components: parseDynamicData(item.param, itemDataHex),
+    })
+  })
+
+  return { headParts, tailParts }
+}
+
 export function encodeFunctionCall(
   input: string,
-  argValues: unknown[] // argValues can be nested for structs
+  argValues: unknown[]
 ): EncodeResult {
   // 1. Parse Input
   const fullSignature = input.trim()
@@ -45,25 +180,21 @@ export function encodeFunctionCall(
     throw new Error('Invalid function signature')
   }
   const funcName = funcNameMatch[1]
-
   const argsStr = fullSignature.substring(
     fullSignature.indexOf('(') + 1,
     fullSignature.lastIndexOf(')')
   )
-
-  // Use viem's parser to handle complex types like structs
   const abiParams = parseAbiParameters(argsStr)
 
-  // Reconstruct the canonical signature for the selector, e.g., "transfer(address,uint256)"
   const getCanonicalSignatureForParams = (
     params: readonly AbiParameter[]
   ): string => {
     return params
       .map((p) => {
-        if ('components' in p && p.type === 'tuple') {
+        if (p.type === 'tuple' && 'components' in p && p.components) {
           return `(${getCanonicalSignatureForParams(p.components)})`
         }
-        if ('components' in p && p.type === 'tuple[]') {
+        if (p.type === 'tuple[]' && 'components' in p && p.components) {
           return `(${getCanonicalSignatureForParams(p.components)})[]`
         }
         return p.type
@@ -76,58 +207,31 @@ export function encodeFunctionCall(
   // 2. Calculate Function Selector
   const selector = keccak256(stringToBytes(canonicalSignature)).slice(0, 10)
 
-  console.log('argValues: ', argValues)
   // 3. Encode Parameters
   const encodedParamsHex = encodeAbiParameters(abiParams, argValues).slice(2)
 
   // 4. Assemble Calldata
   const finalCalldata = selector + encodedParamsHex
 
-  // 5. Build parts for visualization
-  const parts: CalldataPart[] = [
+  // 5. Build the flat breakdown
+  const { headParts, tailParts } = buildFlatBreakdown(
+    abiParams,
+    encodedParamsHex
+  )
+
+  const allParts: CalldataPart[] = [
     {
       name: 'Function Selector',
       type: 'bytes4',
       value: selector,
       description: `keccak256("${canonicalSignature}")`,
     },
+    ...headParts,
+    ...tailParts,
   ]
-
-  let headCursor = 0
-  abiParams.forEach((param, i) => {
-    const paramName = param.name || `Parameter ${i + 1}`
-    const headData = encodedParamsHex.substring(headCursor, headCursor + 64)
-    headCursor += 64
-
-    if (isDynamic(param)) {
-      const offset = parseInt(headData, 16)
-      parts.push({
-        name: `${paramName} (${param.type}) (offset)`,
-        type: 'bytes32',
-        value: `0x${headData}`,
-        description: `Points to byte ${offset} in parameters data`,
-      })
-    } else {
-      parts.push({
-        name: `${paramName} (${param.type})`,
-        type: 'bytes32', // Static elements always take 32 bytes
-        value: `0x${headData}`,
-      })
-    }
-  })
-
-  const tailHex = encodedParamsHex.substring(headCursor)
-  if (tailHex) {
-    parts.push({
-      name: 'Tail Data',
-      type: 'bytes',
-      value: `0x${tailHex}`,
-      description: 'Concatenated data for all dynamic parameters',
-    })
-  }
 
   return {
     calldata: finalCalldata,
-    parts: parts,
+    parts: allParts,
   }
 }

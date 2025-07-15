@@ -97,6 +97,24 @@ const processValues = (
   })
 }
 
+// New type for the flattened list
+interface FlatPart {
+  part: CalldataPart
+  level: number
+}
+
+// Flattens the hierarchical parts into a list with indentation levels
+const flattenParts = (parts: CalldataPart[], level = 0): FlatPart[] => {
+  const flatList: FlatPart[] = []
+  for (const part of parts) {
+    flatList.push({ part, level })
+    if (part.components && part.components.length > 0) {
+      flatList.push(...flattenParts(part.components, level + 1))
+    }
+  }
+  return flatList
+}
+
 export default function Home() {
   const [input, setInput] = useState(
     'transferFrom(address from, address to, uint256 amount)'
@@ -117,7 +135,6 @@ export default function Home() {
       const params = parseAbiParameters(argsStr)
       setAbiParams(params)
 
-      // Reset values when params change, preserving structure
       const buildInitialValues = (p: readonly AbiParameter[]): Value[] =>
         p.map((c) =>
           'components' in c && c.components
@@ -146,6 +163,8 @@ export default function Home() {
       setParts([])
     }
   }
+
+  const flatParts = flattenParts(parts)
 
   return (
     <div className="grid grid-rows-[auto_1fr_auto] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)] bg-gray-50 dark:bg-[#0d1117]">
@@ -203,11 +222,12 @@ export default function Home() {
               <h2 className="text-xl font-bold text-gray-900 dark:text-white mt-6 mb-4">
                 Breakdown
               </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {parts.map((part, index) => (
+              <div className="flex flex-col gap-2">
+                {flatParts.map(({ part, level }, index) => (
                   <div
                     key={index}
-                    className="p-4 bg-gray-100 rounded-lg flex flex-col gap-2 border border-gray-200 hover:border-blue-500 transition dark:bg-gray-800 dark:border-gray-700 dark:hover:border-blue-500"
+                    className="p-4 bg-gray-100 rounded-lg flex flex-col gap-2 border border-gray-200 dark:bg-gray-800 dark:border-gray-700"
+                    style={{ marginLeft: `${level * 2}rem` }}
                   >
                     <div className="flex justify-between items-center">
                       <span className="font-semibold text-gray-800 dark:text-gray-100">
@@ -221,7 +241,7 @@ export default function Home() {
                       {part.value}
                     </div>
                     {part.description && (
-                      <div className="text-xs text-gray-500 italic dark:text-gray-400">
+                      <div className="text-xs text-gray-500 italic dark:text-gray-400 break-all">
                         {part.description}
                       </div>
                     )}
