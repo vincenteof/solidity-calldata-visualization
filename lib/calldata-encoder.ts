@@ -105,9 +105,9 @@ const buildFlatBreakdown = (
   // First pass: process the head and collect dynamic items
   params.forEach((param, i) => {
     const paramName = param.name || `param${i}`
-    const headSlotHex = encodedDataHex.substring(headCursor, headCursor + 64)
 
     if (isDynamic(param)) {
+      const headSlotHex = encodedDataHex.substring(headCursor, headCursor + 64)
       const offset = parseInt(headSlotHex, 16)
       headParts.push({
         name: `${paramName} (${param.type})`,
@@ -116,46 +116,48 @@ const buildFlatBreakdown = (
         description: `Offset to data at byte ${offset}`,
       })
       dynamicItems.push({ param, name: paramName, offset })
+      headCursor += 64 // Advance cursor by 1 slot (32 bytes = 64 hex chars)
     } else if (
-      param.type === 'tuple' &&
       'components' in param &&
+      param.type === 'tuple' &&
       param.components
     ) {
       // Static tuple: its components are inlined in the head.
+      const tupleDataLength = param.components.length * 64 // Length in hex chars
       const staticTupleData = encodedDataHex.substring(
         headCursor,
-        headCursor + param.components.length * 64
+        headCursor + tupleDataLength
       )
       const nested = buildFlatBreakdown(param.components, staticTupleData)
       headParts.push({
         name: `${paramName} (${param.type})`,
         type: 'tuple',
         value: `0x${staticTupleData}`,
-        components: [...nested.headParts, ...nested.tailParts], // Static tuples don't have tails, so this is just for completeness
+        components: [...nested.headParts, ...nested.tailParts],
       })
+      headCursor += tupleDataLength // Advance cursor by the length of the tuple data
     } else {
+      // Simple static type
+      const headSlotHex = encodedDataHex.substring(headCursor, headCursor + 64)
       headParts.push({
         name: `${paramName} (${param.type})`,
         type: 'bytes32',
         value: `0x${headSlotHex}`,
       })
+      headCursor += 64 // Advance cursor by 1 slot
     }
-    headCursor +=
-      32 *
-      (param.type === 'tuple' && !isDynamic(param) && param.components
-        ? param.components.length
-        : 1)
   })
 
   // Sort dynamic items by their offset to process tail data in order
   dynamicItems.sort((a, b) => a.offset - b.offset)
 
   const tailParts: CalldataPart[] = []
-  dynamicItems.forEach((item) => {
+  dynamicItems.forEach((item, i) => {
     const dataStart = item.offset * 2
     // The data for this item runs from its start to the start of the next item, or to the end.
-    const nextOffset = encodedDataHex.length
-    const itemDataHex = encodedDataHex.substring(dataStart, nextOffset)
+    const nextItem = dynamicItems[i + 1]
+    const dataEnd = nextItem ? nextItem.offset * 2 : encodedDataHex.length
+    const itemDataHex = encodedDataHex.substring(dataStart, dataEnd)
 
     tailParts.push({
       name: `Tail for ${item.name}`,
