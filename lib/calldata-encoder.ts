@@ -42,6 +42,25 @@ interface DynamicItem {
 }
 
 /**
+ * Pads a hex string to a full 32-byte word, according to its ABI type.
+ * @param hex - The hex string (without '0x' prefix).
+ * @param type - The ABI type string.
+ * @returns The padded hex string (without '0x' prefix).
+ */
+const padTo32Bytes = (hex: string, type: string): string => {
+  if (type.startsWith('uint') || type.startsWith('int') || type === 'address') {
+    // Numeric types and addresses are padded on the left.
+    return hex.padStart(64, '0')
+  }
+  if (type.startsWith('bytes') && !type.endsWith(']')) {
+    // Fixed-size bytesN are padded on the right.
+    return hex.padEnd(64, '0')
+  }
+  // Default for bytes32, etc.
+  return hex
+}
+
+/**
  * Parses a chunk of data belonging to a single dynamic item.
  * @param param - The ABI definition for the dynamic item.
  * @param dataHex - The hex data for this item, starting from its own beginning.
@@ -51,9 +70,38 @@ const parseDynamicData = (
   param: AbiParameter,
   dataHex: string
 ): CalldataPart[] => {
+  if (param.type.endsWith('[]')) {
+    const elementType = param.type.slice(0, -2)
+    const length = parseInt(dataHex.substring(0, 64), 16)
+    const parts: CalldataPart[] = [
+      {
+        name: 'length',
+        type: 'uint256',
+        value: `0x${dataHex.substring(0, 64)}`,
+        description: `${length}`,
+      },
+    ]
+
+    const itemsDataHex = dataHex.substring(64)
+    let itemCursor = 0
+    for (let i = 0; i < length; i++) {
+      const itemHex = itemsDataHex.substring(itemCursor, itemCursor + 64)
+      parts.push({
+        name: `[${i}]`,
+        type: elementType,
+        value: `0x${padTo32Bytes(itemHex, elementType)}`,
+      })
+      itemCursor += 64
+    }
+    return parts
+  }
+
   if (param.type === 'string' || param.type === 'bytes') {
     const length = parseInt(dataHex.substring(0, 64), 16)
     const data = dataHex.substring(64, 64 + length * 2)
+    // For strings and bytes, the data is padded to a multiple of 32 bytes.
+    const paddedData = data.padEnd(Math.ceil(data.length / 64) * 64, '0')
+
     return [
       {
         name: 'length',
@@ -64,7 +112,8 @@ const parseDynamicData = (
       {
         name: 'value',
         type: param.type === 'string' ? 'utf8' : 'hex',
-        value: `0x${data}`,
+        value: `0x${paddedData}`,
+        description: `Original data: 0x${data}`,
       },
     ]
   } else if ('components' in param && param.components) {
@@ -77,7 +126,7 @@ const parseDynamicData = (
     )
     return [...headParts, ...tailParts]
   }
-  // Placeholder for other dynamic types like arrays
+  // Fallback for any other unhandled types
   return [
     {
       name: 'data',
@@ -142,7 +191,7 @@ const buildFlatBreakdown = (
       headParts.push({
         name: `${paramName} (${param.type})`,
         type: 'bytes32',
-        value: `0x${headSlotHex}`,
+        value: `0x${padTo32Bytes(headSlotHex, param.type)}`,
       })
       headCursor += 64 // Advance cursor by 1 slot
     }
@@ -177,7 +226,7 @@ export function encodeFunctionCall(
 ): EncodeResult {
   // 1. Parse Input
   const fullSignature = input.trim()
-  const funcNameMatch = fullSignature.match(/^(.*?)\s*\(/)
+  const funcNameMatch = fullSignature.match(/^(.*)\s*\(/)
   if (!funcNameMatch) {
     throw new Error('Invalid function signature')
   }

@@ -83,6 +83,12 @@ const processValues = (
     if ('components' in param && param.components) {
       return processValues(param.components, (val as Value[]) || [])
     }
+    // Handle array types by splitting the string
+    if (param.type.endsWith('[]')) {
+      const strVal = (val as string) || ''
+      if (strVal.trim() === '') return [] // Return empty array if input is empty
+      return strVal.split(',').map((s) => s.trim())
+    }
     if (param.type.includes('uint') || param.type.includes('int')) {
       try {
         return BigInt(val as string)
