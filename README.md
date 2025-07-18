@@ -1,7 +1,6 @@
 # Solidity Calldata Visualizer
 
 ![Solidity Calldata Visualizer Screenshot](./public/screenshot.png)
-*Please replace `screenshot.png` with a screenshot of your application.*
 
 Solidity Calldata Visualizer is an interactive web-based tool designed to help Ethereum developers understand the ABI encoding mechanism of Solidity function calls. It provides a clear, step-by-step view that details how a function signature and its arguments are converted into the final hexadecimal calldata sent to a smart contract.
 
