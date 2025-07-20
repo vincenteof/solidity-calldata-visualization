@@ -226,7 +226,7 @@ export function encodeFunctionCall(
 ): EncodeResult {
   // 1. Parse Input
   const fullSignature = input.trim()
-  const funcNameMatch = fullSignature.match(/^(.*)\s*\(/)
+  const funcNameMatch = fullSignature.match(/^(.*?)\s*\(/)
   if (!funcNameMatch) {
     throw new Error('Invalid function signature')
   }
